@@ -23,29 +23,48 @@ Transformer calls are minimised on two levels:
 Concurrent writes of the same row are resolved with `INSERT … ON CONFLICT DO
 NOTHING`, so racing requests cannot fail each other.
 
-## Run
+## Run (Docker)
+
+Docker is the supported way to run the service, the tests and the CLI; no local
+Python setup is needed.
 
 ```bash
 docker build -t payload-cache .
-docker run --rm -p 8000:8000 -v payload-data:/data payload-cache
+docker run -d --name payload-cache -p 8000:8000 -v payload-data:/data payload-cache
 ```
 
-Locally:
+The API is then at <http://localhost:8000> (interactive docs at `/docs`). The
+SQLite file lives in the `payload-data` volume, so data survives restarts.
+Stop and remove with `docker rm -f payload-cache`.
+
+Configuration (env vars, pass with `-e`): `CACHE_DATABASE_URL` (default in the
+image: `sqlite:////data/cache.db`) and `CACHE_TRANSFORM_LATENCY_SECONDS`
+(simulates a slow transformer, default `0`).
+
+Quick check:
 
 ```bash
-pip install -e ".[dev]"
-uvicorn cache_service.main:create_app --factory --reload
-pytest
+curl -X POST localhost:8000/payload -H 'content-type: application/json' \
+  -d '{"list_1": ["first string", "second string"], "list_2": ["other string", "another string"]}'
+curl localhost:8000/payload/<id from the response>
 ```
 
-Configuration (env vars): `CACHE_DATABASE_URL` (default `sqlite:///./data/cache.db`),
-`CACHE_TRANSFORM_LATENCY_SECONDS` (simulate a slow transformer, default `0`).
+## Tests
+
+```bash
+docker run --rm -v "$PWD":/app -w /app python:3.12-slim \
+  sh -c 'pip install -q -e ".[dev]" && pytest -v'
+```
 
 ## CLI
 
+The CLI (`cache-cli`) is installed in the image and talks to the service over
+HTTP. With the container above running:
+
 ```bash
-cache-cli -H http://localhost:8000 -r 3 -j '{"list_1": ["a", "b"], "list_2": ["c", "d"]}'
-cat request.json | cache-cli -i - -o results.jsonl
+docker exec payload-cache cache-cli -r 3 -j '{"list_1": ["a", "b"], "list_2": ["c", "d"]}'
+docker exec -i payload-cache cache-cli -i - < request.json
+docker exec payload-cache cache-cli --help
 ```
 
 | Flag | Meaning |
@@ -57,7 +76,7 @@ cat request.json | cache-cli -i - -o results.jsonl
 | `-o`, `--output` | Result file, `-` for stdout (default) |
 
 Each iteration prints one JSON line: `id`, `created`, `output`, `elapsed_ms`.
-With `CACHE_TRANSFORM_LATENCY_SECONDS=0.2` on the server, `--repeat` makes the
+Start the container with `-e CACHE_TRANSFORM_LATENCY_SECONDS=0.5` to make the
 cache visible: the first iteration is slow, the rest are fast.
 
 ## Decisions and shortcuts
